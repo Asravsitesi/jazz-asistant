@@ -1,1 +1,1 @@
-window.JAZZ_CONFIG={SUPABASE_URL:'',SUPABASE_PUBLISHABLE_KEY:'',FUNCTION_URL:'',DEFAULT_MAX_TOKENS:4096};
+window.JAZZ_CONFIG={SUPABASE_URL:'https://ilgggxhaljsykkyvfhpf.supabase.co',SUPABASE_PUBLISHABLE_KEY:'sb_publishable_D-MIbf-eEhEQNrhdaVhBuQ_4qF37680',FUNCTION_URL:'https://ilgggxhaljsykkyvfhpf.supabase.co/functions/v1/chat-runtime',DEFAULT_MAX_TOKENS:4096};
