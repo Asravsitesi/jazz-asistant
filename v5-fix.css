@@ -1,0 +1,1 @@
+.messages>.welcome:only-child{display:flex!important}.messages>.welcome:not(:only-child){display:none!important}
