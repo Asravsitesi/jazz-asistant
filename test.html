@@ -43,11 +43,7 @@ function renderProviders(){
   $('#providers').innerHTML=order.map((provider,idx)=>{
     const configured=Number(state.configured[provider]||0),results=state.results[provider]||[],ok=results.filter(x=>x.ok).length,bad=results.filter(x=>x.configured!==false&&!x.ok).length;
     const status=results.length?(bad?`<span class="badge bad">${bad} hata</span>`:`<span class="badge ok">${ok}/${configured} çalışıyor</span>`):`<span class="badge">${configured||'—'} anahtar</span>`;
-    let rows='';
-    if(provider==='notion'){
-      const byIndex=Object.fromEntries(results.map(x=>[x.index,x]));
-      rows=Array.from({length:20},(_,i)=>{const index=i+1,x=byIndex[index];if(!x)return `<div class="result idle"><div><div class="result-title">Notion #${index}</div><small>Test edilmedi veya yapılandırılmadı</small></div><span class="latency">—</span></div>`;return resultRow(x)}).join('');
-    }else rows=results.length?results.map(resultRow).join(''):'<div class="empty">Henüz test edilmedi.</div>';
+    const rows=results.length?results.map(resultRow).join(''):'<div class="empty">Henüz test edilmedi.</div>';
     return `<details class="provider" ${idx===0?'open':''}><summary><span class="provider-icon">${icons[provider]}</span><span><span class="provider-name">${names[provider]}</span><span class="provider-meta">${provider==='notion'?'20 güvenli bağlantı yuvası':'Model API anahtar havuzu'}</span></span>${status}<span class="chevron">⌄</span></summary><div class="provider-body"><div class="provider-actions"><button class="btn provider-test" data-provider="${provider}">Yalnızca ${names[provider]} test et</button></div><div class="results">${rows}</div></div></details>`;
   }).join('');
   document.querySelectorAll('.provider-test').forEach(b=>b.onclick=()=>runDiagnostics([b.dataset.provider],b));
