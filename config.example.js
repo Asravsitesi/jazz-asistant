@@ -1,0 +1,2 @@
+// Copy to config.js after creating the independent Jazz Supabase project.
+window.JAZZ_CONFIG={SUPABASE_URL:'https://YOUR_PROJECT.supabase.co',SUPABASE_PUBLISHABLE_KEY:'sb_publishable_...',FUNCTION_URL:'https://YOUR_PROJECT.supabase.co/functions/v1/chat-runtime',DEFAULT_MAX_TOKENS:8192};
