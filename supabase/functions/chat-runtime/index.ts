@@ -1,99 +1,26 @@
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts';
 
-const cors={
-  'Access-Control-Allow-Origin':'*',
-  'Access-Control-Allow-Headers':'authorization, x-client-info, apikey, content-type',
-  'Access-Control-Allow-Methods':'POST, OPTIONS'
-};
-const json=(data:unknown,status=200)=>new Response(JSON.stringify(data),{status,headers:{...cors,'Content-Type':'application/json','Cache-Control':'no-store'}});
+const ORIGIN='https:'+'//asravsitesi.github.io';
+const NOTION_ME='https:'+'//api.notion.com/v1/users/me';
+const GEMINI_BASE='https:'+'//generativelanguage.googleapis.com/v1beta/models/';
+const cors={'Access-Control-Allow-Origin':ORIGIN,'Access-Control-Allow-Headers':'authorization, x-client-info, apikey, content-type','Access-Control-Allow-Methods':'POST, OPTIONS','Cache-Control':'no-store','Vary':'Origin'};
+const json=(data:unknown,status=200)=>new Response(JSON.stringify(data),{status,headers:{...cors,'Content-Type':'application/json; charset=utf-8'}});
 const split=(name:string)=>(Deno.env.get(name)||'').split(',').map(x=>x.trim()).filter(Boolean);
-const providerNames=['notion','groq','openrouter','openai','gemini'] as const;
-type Provider=typeof providerNames[number];
-const notionSlots=Array.from({length:20},(_,i)=>({index:i+1,key:(Deno.env.get(`NOTION_API_KEY_${i+1}`)||'').trim()}));
+const numbered=(base:string,count=20)=>Array.from({length:count},(_,i)=>Deno.env.get(base+(i?`_${i+1}`:''))||'');
+const uniq=(items:string[])=>[...new Set(items.filter(Boolean))];
 const pools={
-  groq:split('GROQ_API_KEYS'),
-  openrouter:split('OPENROUTER_API_KEYS'),
-  openai:split('OPENAI_API_KEYS'),
-  gemini:split('GEMINI_API_KEYS'),
-  notion:notionSlots.filter(x=>x.key)
+  notion:uniq([...split('NOTION_TOKENS'),...split('NOTION_API_KEYS'),...numbered('NOTION_TOKEN'),...numbered('NOTION_API_KEY')]),
+  groq:uniq([...split('GROQ_API_KEYS'),Deno.env.get('GROQ_API_KEY')||'']),
+  openrouter:uniq([...split('OPENROUTER_API_KEYS'),Deno.env.get('OPENROUTER_API_KEY')||'']),
+  openai:uniq([...split('OPENAI_API_KEYS'),Deno.env.get('OPENAI_API_KEY')||'']),
+  gemini:uniq([...split('GEMINI_API_KEYS'),Deno.env.get('GEMINI_API_KEY')||''])
 };
-const limits=new Map<string,number>();
-function takeQuota(req:Request){
-  const ip=(req.headers.get('x-forwarded-for')||req.headers.get('cf-connecting-ip')||'public').split(',')[0].trim();
-  const hour=Math.floor(Date.now()/3600000),key=ip+'|'+hour,count=limits.get(key)||0;
-  if(count>=60)return false;
-  limits.set(key,count+1);
-  if(limits.size>5000)for(const k of limits.keys())if(!k.endsWith('|'+hour))limits.delete(k);
-  return true;
-}
-const endpoints:Record<'groq'|'openrouter'|'openai',[string,string]>={
-  groq:['https:'+'//api.groq.com/openai/v1/chat/completions','llama-3.1-8b-instant'],
-  openrouter:['https:'+'//openrouter.ai/api/v1/chat/completions','openai/gpt-4.1-mini'],
-  openai:['https:'+'//api.openai.com/v1/chat/completions','gpt-4.1-mini']
-};
-const modelCache=new Map<string,string>();
-async function resolveModel(provider:'groq'|'openrouter'|'openai',key:string){
-  if(provider!=='groq')return endpoints[provider][1];
-  const cacheKey='groq:'+key.slice(-8),cached=modelCache.get(cacheKey);
-  if(cached)return cached;
-  try{
-    const r=await fetch('https:'+'//api.groq.com/openai/v1/models',{signal:AbortSignal.timeout(15000),headers:{Authorization:'Bearer '+key}});
-    if(r.ok){
-      const body=await r.json(),ids=(body.data||[]).filter((x:any)=>x.active!==false).map((x:any)=>x.id).filter(Boolean);
-      const preferred=['llama-3.3-70b-versatile','openai/gpt-oss-120b','meta-llama/llama-4-scout-17b-16e-instruct','qwen/qwen3-32b','llama-3.1-8b-instant'];
-      const model=preferred.find(x=>ids.includes(x))||ids.find((x:string)=>!/whisper|tts|speech|guard|safeguard|prompt-guard/i.test(x));
-      if(model){modelCache.set(cacheKey,model);return model;}
-    }
-  }catch{}
-  return endpoints.groq[1];
-}
-async function compatible(provider:'groq'|'openrouter'|'openai',key:string,messages:any[],maxTokens:number){
-  const [url]=endpoints[provider],model=await resolveModel(provider,key);
-  const r=await fetch(url,{method:'POST',signal:AbortSignal.timeout(30000),headers:{'Content-Type':'application/json',Authorization:'Bearer '+key,'HTTP-Referer':'https:'+'//asravsitesi.github.io/jazz-asistant/','X-Title':'Jazz Asistant'},body:JSON.stringify({model,messages,max_tokens:maxTokens,temperature:.55})});
-  const body=await r.json().catch(()=>({}));
-  if(!r.ok)throw new Error(provider+'_'+r.status+'_'+String(body?.error?.message||'request_failed').slice(0,180));
-  return{answer:body.choices?.[0]?.message?.content||'',model,usage:body.usage||{}};
-}
-async function gemini(key:string,messages:any[],maxTokens:number){
-  const model='gemini-2.5-flash',url='https:'+'//generativelanguage.googleapis.com/v1beta/models/'+model+':generateContent?key='+encodeURIComponent(key);
-  const system=messages.filter(x=>x.role==='system').map(x=>x.content).join('\n');
-  const contents=messages.filter(x=>x.role!=='system').map(x=>({role:x.role==='assistant'?'model':'user',parts:[{text:x.content}]}));
-  const r=await fetch(url,{method:'POST',signal:AbortSignal.timeout(30000),headers:{'Content-Type':'application/json'},body:JSON.stringify({systemInstruction:{parts:[{text:system}]},contents,generationConfig:{maxOutputTokens:maxTokens,temperature:.55}})});
-  const body=await r.json().catch(()=>({}));
-  if(!r.ok)throw new Error('gemini_'+r.status+'_'+String(body?.error?.message||'request_failed').slice(0,180));
-  return{answer:body.candidates?.[0]?.content?.parts?.map((x:any)=>x.text||'').join('')||'',model,usage:body.usageMetadata||{}};
-}
-async function testModel(provider:'groq'|'openrouter'|'openai'|'gemini',key:string,index:number){
-  const started=Date.now();
-  try{const messages=[{role:'user',content:'Reply only with OK.'}];provider==='gemini'?await gemini(key,messages,8):await compatible(provider,key,messages,8);return{provider,index,configured:true,ok:true,latencyMs:Date.now()-started};}
-  catch(e){return{provider,index,configured:true,ok:false,error:String(e).replace('Error: ','').slice(0,220),latencyMs:Date.now()-started};}
-}
-async function testNotion(key:string,index:number){
-  const started=Date.now();
-  try{const r=await fetch('https:'+'//api.notion.com/v1/users/me',{signal:AbortSignal.timeout(15000),headers:{Authorization:'Bearer '+key,'Notion-Version':'2022-06-28'}});return{provider:'notion',index,configured:true,ok:r.ok,status:r.status,latencyMs:Date.now()-started};}
-  catch{return{provider:'notion',index,configured:true,ok:false,status:0,latencyMs:Date.now()-started};}
-}
-function configuredCounts(){return{notion:pools.notion.length,groq:pools.groq.length,openrouter:pools.openrouter.length,openai:pools.openai.length,gemini:pools.gemini.length};}
-async function diagnostics(requested:unknown){
-  const selected=(Array.isArray(requested)?requested:providerNames).filter((x):x is Provider=>providerNames.includes(x as Provider));
-  const jobs:Promise<any>[]=[];
-  if(selected.includes('notion'))pools.notion.forEach(x=>jobs.push(testNotion(x.key,x.index)));
-  for(const provider of ['groq','openrouter','openai','gemini'] as const)if(selected.includes(provider))pools[provider].forEach((key,i)=>jobs.push(testModel(provider,key,i+1)));
-  return{configured:configuredCounts(),testedProviders:selected,notionSlotCount:20,results:await Promise.all(jobs)};
-}
-Deno.serve(async req=>{
-  if(req.method==='OPTIONS')return new Response('ok',{headers:cors});
-  if(req.method!=='POST')return json({error:'method_not_allowed'},405);
-  if(!takeQuota(req))return json({error:'public_test_rate_limit',retry:'Bir saat sonra tekrar deneyin.'},429);
-  try{
-    const body=await req.json();
-    if(body.action==='diagnostics')return json(await diagnostics(body.providers));
-    const input=Array.isArray(body.messages)?body.messages:[];
-    const maxTokens=Math.max(64,Math.min(Number(body.maxTokens)||4096,8192));
-    const messages=[{role:'system',content:'Sen Jazz Asistant adlı kişisel çalışma asistanısın. Gizli bilgileri açıklama. Notion içeriğini bu genel test modunda okuma veya değiştirme. Geri döndürülemez işlemlerden önce açık onay iste.'},...input.slice(-40).map((x:any)=>({role:['system','user','assistant'].includes(x.role)?x.role:'user',content:String(x.content||'').slice(0,30000)}))];
-    const order=(Array.isArray(body.providers)?body.providers:['groq','openrouter','openai','gemini']).filter((x:string)=>['groq','openrouter','openai','gemini'].includes(x)&&(pools as any)[x]?.length) as Array<'groq'|'openrouter'|'openai'|'gemini'>;
-    let last='no_provider_keys';
-    for(const provider of order)for(let i=0;i<pools[provider].length;i++)try{const started=Date.now(),out=provider==='gemini'?await gemini(pools[provider][i],messages,maxTokens):await compatible(provider,pools[provider][i],messages,maxTokens);return json({...out,provider,keyIndex:i+1,latencyMs:Date.now()-started,mode:'public-test'});}catch(e){last=String(e).replace('Error: ','');}
-    return json({error:last.slice(0,300)},502);
-  }catch(e){return json({error:String(e).replace('Error: ','').slice(0,300)},400);}
-});
+const limits=new Map<string,{hour:number,count:number}>();
+function allowed(req:Request){const ip=(req.headers.get('x-forwarded-for')||req.headers.get('cf-connecting-ip')||'public').split(',')[0].trim(),hour=Math.floor(Date.now()/3600000),old=limits.get(ip);if(old?.hour===hour&&old.count>=60)return false;limits.set(ip,{hour,count:old?.hour===hour?(old.count+1):1});return true;}
+const compatible={groq:['https:'+'//api.groq.com/openai/v1/chat/completions','openai/gpt-oss-120b'],openrouter:['https:'+'//openrouter.ai/api/v1/chat/completions','openai/gpt-4.1-mini'],openai:['https:'+'//api.openai.com/v1/chat/completions','gpt-4.1-mini']} as const;
+async function compatibleTest(provider:'groq'|'openrouter'|'openai',key:string,messages:any[],maxTokens:number){const [url,model]=compatible[provider],r=await fetch(url,{method:'POST',signal:AbortSignal.timeout(30000),headers:{'Content-Type':'application/json',Authorization:`Bearer ${key}`,'HTTP-Referer':ORIGIN,'X-Title':'Jazz Asistant'},body:JSON.stringify({model,messages,max_tokens:maxTokens,temperature:.2})}),b=await r.json().catch(()=>({}));if(!r.ok)throw Error(`${provider}_${r.status}_${String(b?.error?.message||'request_failed').slice(0,160)}`);return{answer:String(b.choices?.[0]?.message?.content||'').trim(),model,usage:b.usage||{}};}
+async function gemini(key:string,messages:any[],maxTokens:number){const model='gemini-2.5-flash',r=await fetch(`${GEMINI_BASE}${model}:generateContent?key=${encodeURIComponent(key)}`,{method:'POST',signal:AbortSignal.timeout(30000),headers:{'Content-Type':'application/json'},body:JSON.stringify({contents:messages.filter(x=>x.role!=='system').map(x=>({role:x.role==='assistant'?'model':'user',parts:[{text:x.content}]})),generationConfig:{maxOutputTokens:maxTokens,temperature:.2}})}),b=await r.json().catch(()=>({}));if(!r.ok)throw Error(`gemini_${r.status}_${String(b?.error?.message||'request_failed').slice(0,160)}`);return{answer:String(b.candidates?.[0]?.content?.parts?.map((x:any)=>x.text||'').join('')||'').trim(),model,usage:b.usageMetadata||{}};}
+async function testNotion(key:string,index:number){const started=Date.now();try{const r=await fetch(NOTION_ME,{signal:AbortSignal.timeout(15000),headers:{Authorization:`Bearer ${key}`,'Notion-Version':'2022-06-28'}}),b=await r.json().catch(()=>({}));return{provider:'notion',index,configured:true,ok:r.ok,status:r.status,error:r.ok?undefined:String(b?.message||b?.code||'request_failed').slice(0,180),latencyMs:Date.now()-started};}catch(e){return{provider:'notion',index,configured:true,ok:false,status:0,error:String(e).slice(0,180),latencyMs:Date.now()-started};}}
+async function testModel(provider:'groq'|'openrouter'|'openai'|'gemini',key:string,index:number){const started=Date.now();try{const out=provider==='gemini'?await gemini(key,[{role:'user',content:'Reply only with OK.'}],8):await compatibleTest(provider,key,[{role:'user',content:'Reply only with OK.'}],8);return{provider,index,configured:true,ok:!!out.answer,model:out.model,latencyMs:Date.now()-started};}catch(e){return{provider,index,configured:true,ok:false,error:String(e).replace('Error: ','').slice(0,220),latencyMs:Date.now()-started};}}
+async function diagnostics(requested:unknown){const all=['notion','groq','openrouter','openai','gemini'] as const,selected=(Array.isArray(requested)?requested:all).filter((x):x is typeof all[number]=>all.includes(x as any)),jobs:Promise<any>[]=[];if(selected.includes('notion'))pools.notion.forEach((key,index)=>jobs.push(testNotion(key,index+1)));for(const p of ['groq','openrouter','openai','gemini'] as const)if(selected.includes(p))pools[p].forEach((key,index)=>jobs.push(testModel(p,key,index+1)));return{configured:Object.fromEntries(all.map(p=>[p,pools[p].length])),testedProviders:selected,results:await Promise.all(jobs)};}
+Deno.serve(async req=>{if(req.method==='OPTIONS')return req.headers.get('origin')===ORIGIN?new Response('ok',{headers:cors}):new Response(null,{status:403});if(req.method!=='POST')return json({error:'method_not_allowed'},405);if(req.headers.get('origin')&&req.headers.get('origin')!==ORIGIN)return json({error:'origin_not_allowed'},403);if(!allowed(req))return json({error:'test_rate_limit'},429);try{const body=await req.json();if(body.action==='diagnostics')return json(await diagnostics(body.providers));const input=Array.isArray(body.messages)?body.messages:[];if(!input.length)return json({error:'no_messages'},400);const maxTokens=Math.max(64,Math.min(Number(body.maxTokens)||4096,8192)),messages=input.slice(-30).map((x:any)=>({role:x?.role==='assistant'?'assistant':'user',content:String(x?.content||'').slice(0,30000)})),requested=Array.isArray(body.providers)?body.providers:[];const order=(requested.length?requested:['groq','openrouter','openai','gemini']).filter((x):x is 'groq'|'openrouter'|'openai'|'gemini'=>['groq','openrouter','openai','gemini'].includes(x)&&pools[x].length);let last='no_provider_keys';for(const p of order)for(let i=0;i<pools[p].length;i++)try{const started=Date.now(),out=p==='gemini'?await gemini(pools[p][i],messages,maxTokens):await compatibleTest(p,pools[p][i],messages,maxTokens);if(!out.answer)throw Error('empty_response');return json({...out,provider:p,keyIndex:i+1,latencyMs:Date.now()-started,mode:'public-test'});}catch(e){last=String(e).replace('Error: ','');}return json({error:last.slice(0,300)},502);}catch(e){return json({error:String(e).replace('Error: ','').slice(0,300)},400);}});
