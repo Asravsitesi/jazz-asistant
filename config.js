@@ -1,2 +1,2 @@
 window.JAZZ_CONFIG={SUPABASE_URL:'https://ilgggxhaljsykkyvfhpf.supabase.co',SUPABASE_PUBLISHABLE_KEY:'sb_publishable_D-MIbf-eEhEQNrhdaVhBuQ_4qF37680',FUNCTION_URL:'https://ilgggxhaljsykkyvfhpf.supabase.co/functions/v1/chat-runtime',DEFAULT_MAX_TOKENS:4096};
-document.addEventListener('DOMContentLoaded',()=>{if(!location.pathname.endsWith('/test.html'))return;const s=document.createElement('script');s.src='notion-live-test.js?v=9001';s.defer=true;document.body.appendChild(s);});
+document.addEventListener('DOMContentLoaded',()=>{if(!location.pathname.endsWith('/test.html'))return;const s=document.createElement('script');s.src='notion-live-test.js?v=9100';s.defer=true;document.body.appendChild(s);});
